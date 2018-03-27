@@ -1,0 +1,143 @@
+---
+title: "Basic Regression Models"
+output: html_notebook
+---
+---
+```{r}
+library(dplyr)
+library(ggplot2)
+```
+
+
+```{r}
+data <- read.csv('Data/data1.csv')
+data <- filter(data, !is.na(year))
+data2 <- read.csv('Data/primary.csv')
+data2 <- select(data2, stcd, year, pwin, HQ_Challenger)
+```
+
+```{r}
+data <- left_join(data, data2, by = c('stcd', 'year'), how = 'left')
+```
+
+```{r}
+library(dplyr)
+data <- data %>%
+  arrange(stcd, year) %>%
+  group_by(stcd) %>%
+  mutate(win = ifelse(incwin == 1 & inc == 1, 1, 
+               ifelse(incwin == 1 & inc == 0, -1, NA))) %>%
+  mutate(demwin = dplyr::lead(ptynow, n = 1)) %>%
+  mutate(winner = ifelse(is.na(win), demwin, win))
+```
+
+```{r}
+data <- data %>%
+  mutate(race_winner = ifelse(pwin == 1, 'Democrat', 
+                              ifelse(pwin == 0, 'Republican', 'Other'))) %>%
+  mutate(incumbent = ifelse(inc == 0, 'Republican_Inc', 
+                     ifelse(inc == 1, 'Democrat_Inc', 
+                     ifelse(inc < 5 & inc > 1, 'Open_Seat_Inc', 'Other_Inc')))) %>%
+  group_by(stcd) %>%
+  mutate(dpres_lag = dplyr::lag(dpres, n = 1), 
+         split_lag = dplyr::lag(split, n = 1), 
+         inc_lag = dplyr::lag(incumbent, n = 1)) 
+
+data$dvp_upd <- ifelse(is.na(data$dvp) & data$inc_lag == 'Democrat_Inc', 50, 
+            ifelse(is.na(data$dvp) & data$inc_lag == 'Republican_Inc', 50, data$dvp))
+
+data$HQ_Challenger <- ifelse(is.na(data$HQ_Challenger), 0, data$HQ_Challenger)
+```
+
+#Modelling
+
+#Multi Logistic Regression
+```{r}
+library(nnet)
+data$race_winner2 <- as.factor(data$race_winner)
+data$model_winner <-relevel(data$race_winner2, ref = 'Democrat')
+```
+
+```{r}
+fit1 <- multinom(model_winner ~ dvp + incumbent + midterm + dpres_lag + split_lag, data = data)
+```
+
+```{r}
+train <- data %>% filter(year < 2008)
+test <- filter(data, year >= 2008)
+
+fit2 <- multinom(model_winner ~ dvp_upd + incumbent + midterm + dpres_lag + split_lag + HQ_Challenger, data = train)
+
+pred <- predict(fit2, test, type = 'probs')
+head(pred)
+```
+
+```{r}
+predictions <- cbind(as.data.frame(select(test, year, stcd, model_winner, HQ_Challenger, 
+                                          dvp_upd, incumbent, dpres_lag)), 
+                     as.data.frame(pred))
+predictions$predict <- ifelse(predictions$Democrat > predictions$Republican, 'Democrat', 'Republican')
+```
+
+```{r}
+predictions$correct <- ifelse(predictions$model_winner == predictions$predict, 1, 0)
+table(predictions$correct)
+```
+
+```{r}
+pred2 <- predict(fit2, test, type = 'class')
+table(test$model_winner, pred2)
+```
+
+```{r}
+wrong <- predictions %>% filter(correct == 0) %>% arrange(year) %>% 
+  mutate(wront = ifelse(model_winner == 'Democrat', Democrat, Republican))
+
+library(ggplot2)
+ggplot(wrong, aes(wront, fill = incumbent)) + geom_histogram()
+
+predictions %>% filter(incumbent != 'Democrat' & incumbent != 'Republican') %>% 
+  ggplot(aes(correct)) + geom_bar(stat = 'count')
+```
+
+```{r}
+predictions %>%
+  filter(correct == 0) 
+```
+
+#Linear Regression
+
+
+```{r}
+fit_reg <- lm(dv ~ dvp_upd + incumbent + midterm + dpres_lag + split_lag + HQ_Challenger, data = train)
+pred_reg <- predict(fit_reg, test)
+
+reg_predictions <- as.data.frame(pred_reg)
+reg_predictions <- reg_predictions %>% mutate(winner = ifelse(pred_reg > 50, 'Democrat', 'Republican'))
+
+reg_predictions <- cbind(reg_predictions, data.frame(test$race_winner, test$dv))
+reg_predictions$correct <- ifelse(reg_predictions$winner == reg_predictions$test.race_winner, 1, 0)
+table(reg_predictions$correct)
+```
+
+```{r}
+reg_predictions
+```
+
+```{r}
+reg_predictions %>%
+  filter(correct == 0) %>%
+  ggplot(aes(pred_reg)) + geom_histogram()
+```
+
+```{r}
+ggplot(reg_predictions, aes(pred_reg, test.dv)) + geom_point() + geom_smooth(method = 'lm')
+```
+```{r}
+fit_notrain <- lm(dv ~ dvp_upd + incumbent + midterm + dpres_lag + split_lag + HQ_Challenger, data = data)
+summary(fit_notrain)
+```
+
+```{r}
+sqrt(mean(fit_notrain$residuals^2))
+```

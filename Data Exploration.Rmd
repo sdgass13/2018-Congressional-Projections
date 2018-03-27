@@ -1,0 +1,82 @@
+---
+title: "Data Exploration"
+output: html_notebook
+---
+```{r}
+library(dplyr)
+library(ggplot2)
+```
+
+#Clean/Munge
+```{r}
+data <- read.csv('Data/data1.csv')
+data <- filter(data, !is.na(year))
+data2 <- read.csv('Data/primary.csv')
+data2 <- select(data2, stcd, year, pwin, HQ_Challenger)
+```
+
+```{r}
+data <- left_join(data, data2, by = c('stcd', 'year'), how = 'left')
+```
+
+```{r}
+library(dplyr)
+data <- data %>%
+  arrange(stcd, year) %>%
+  group_by(stcd) %>%
+  mutate(win = ifelse(incwin == 1 & inc == 1, 1, 
+               ifelse(incwin == 1 & inc == 0, -1, NA))) %>%
+  mutate(demwin = dplyr::lead(ptynow, n = 1)) %>%
+  mutate(winner = ifelse(is.na(win), demwin, win))
+```
+
+```{r}
+data <- data %>%
+  mutate(race_winner = ifelse(pwin == 1, 'Democrat', 
+                              ifelse(pwin == 0, 'Republican', 'Other'))) %>%
+  mutate(incumbent = ifelse(inc == 0, 'Republican_Inc', 
+                     ifelse(inc == 1, 'Democrat_Inc', 
+                     ifelse(inc < 5 & inc > 1, 'Open_Seat_Inc', 'Other_Inc')))) %>%
+  group_by(stcd) %>%
+  mutate(dpres_lag = dplyr::lag(dpres, n = 1), 
+         split_lag = dplyr::lag(split, n = 1), 
+         inc_lag = dplyr::lag(incumbent, n = 1)) 
+
+data$dvp_upd <- ifelse(is.na(data$dvp) & data$inc_lag == 'Democrat_Inc', 50, 
+            ifelse(is.na(data$dvp) & data$inc_lag == 'Republican_Inc', 50, data$dvp))
+
+data$HQ_Challenger <- ifelse(is.na(data$HQ_Challenger), 0, data$HQ_Challenger)
+```
+
+## Taking a look at the data. The goal is to build an accurate model to predict the 2018 races. 
+
+```{r}
+head(data)
+```
+
+```{r}
+ggplot(data, aes(race_winner, fill = race_winner)) + 
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values = c('blue', 'yellow', 'red')) + 
+  theme_minimal() +
+  theme(legend.position = 'none')
+```
+
+```{r}
+by_year <-  data %>%
+  group_by(year, race_winner) %>%
+  summarize(win = n()) 
+
+ggplot(filter(by_year, race_winner == 'Democrat'), aes(year, win)) +
+  geom_line(col = 'blue') + 
+  geom_line(data = filter(by_year, race_winner == 'Republican'), aes(year, win), col = 'red') + 
+  theme_minimal()
+```
+
+## In general the results of the previous election in the district give a very good indication of the results in the current year. The difficult part of this project will be parsing out the middle-ground cases in the model. 
+
+```{r}
+ggplot(data, aes(dvp, dpres, col = race_winner)) + geom_point() + theme_minimal()
+
+```
+
